@@ -5,6 +5,9 @@ import sys
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+from utils.layers import CQAttention
+
 try:
     from transformers import modeling_bert
     from transformers import modeling_roberta
@@ -27,13 +30,13 @@ from utils import utils
 
 logger = logging.getLogger(__name__)
 
-
 INHERIT_BERT = os.environ.get('INHERIT_BERT', 0)
 if INHERIT_BERT:
     PreTrainedModelClass = modeling_bert.BertPreTrainedModel
 else:
     PreTrainedModelClass = modeling_roberta.RobertaPreTrainedModel
-print ('PreTrainedModelClass', PreTrainedModelClass)
+print('PreTrainedModelClass', PreTrainedModelClass)
+
 
 class DRAGON(nn.Module):
 
@@ -47,7 +50,18 @@ class DRAGON(nn.Module):
         self.n_ntype = n_ntype
         self.n_etype = n_etype
 
-        self.lmgnn, self.loading_info = LMGNN.from_pretrained(model_name, output_hidden_states=True, output_loading_info=True, args=args, model_name=model_name, k=k, n_ntype=n_ntype, n_etype=n_etype, n_concept=n_concept, concept_dim=concept_dim, concept_in_dim=concept_in_dim, n_attention_head=n_attention_head, fc_dim=fc_dim, n_fc_layer=n_fc_layer, p_emb=p_emb, p_gnn=p_gnn, p_fc=p_fc, pretrained_concept_emb=pretrained_concept_emb, freeze_ent_emb=freeze_ent_emb, init_range=init_range, ie_dim=ie_dim, info_exchange=info_exchange, ie_layer_num=ie_layer_num,  sep_ie_layers=sep_ie_layers, layer_id=layer_id)
+        self.lmgnn, self.loading_info = LMGNN.from_pretrained(model_name, output_hidden_states=True,
+                                                              output_loading_info=True, args=args,
+                                                              model_name=model_name, k=k, n_ntype=n_ntype,
+                                                              n_etype=n_etype, n_concept=n_concept,
+                                                              concept_dim=concept_dim, concept_in_dim=concept_in_dim,
+                                                              n_attention_head=n_attention_head, fc_dim=fc_dim,
+                                                              n_fc_layer=n_fc_layer, p_emb=p_emb, p_gnn=p_gnn,
+                                                              p_fc=p_fc, pretrained_concept_emb=pretrained_concept_emb,
+                                                              freeze_ent_emb=freeze_ent_emb, init_range=init_range,
+                                                              ie_dim=ie_dim, info_exchange=info_exchange,
+                                                              ie_layer_num=ie_layer_num, sep_ie_layers=sep_ie_layers,
+                                                              layer_id=layer_id)
 
     def batch_graph(self, edge_index_init, edge_type_init, pos_triples_init, neg_nodes_init, n_nodes):
         """
@@ -58,22 +72,23 @@ class DRAGON(nn.Module):
         """
         n_examples = len(edge_index_init)
         edge_index = [edge_index_init[_i_] + _i_ * n_nodes for _i_ in range(n_examples)]
-        edge_index = torch.cat(edge_index, dim=1) #[2, total_E]
-        edge_type = torch.cat(edge_type_init, dim=0) #[total_E, ]
+        edge_index = torch.cat(edge_index, dim=1)  # [2, total_E]
+        edge_type = torch.cat(edge_type_init, dim=0)  # [total_E, ]
 
         pos_triples = [[], [], []]
         for _i_ in range(n_examples):
-            h = pos_triples_init[_i_][0] + _i_ * n_nodes #tensor[n_triple?,]
-            r = pos_triples_init[_i_][1]                 #tensor[n_triple?,]
-            t = pos_triples_init[_i_][2] + _i_ * n_nodes #tensor[n_triple?,]
+            h = pos_triples_init[_i_][0] + _i_ * n_nodes  # tensor[n_triple?,]
+            r = pos_triples_init[_i_][1]  # tensor[n_triple?,]
+            t = pos_triples_init[_i_][2] + _i_ * n_nodes  # tensor[n_triple?,]
             pos_triples[0].append(h)
             pos_triples[1].append(r)
             pos_triples[2].append(t)
-        pos_triples = torch.stack([torch.cat(item) for item in pos_triples]) #[3, `total_n_triple`] where `total_n_triple` is sum of n_triple within batch
+        pos_triples = torch.stack([torch.cat(item) for item in
+                                   pos_triples])  # [3, `total_n_triple`] where `total_n_triple` is sum of n_triple within batch
         assert pos_triples.size(0) == 3
 
         neg_nodes = [neg_nodes_init[_i_] + _i_ * n_nodes for _i_ in range(n_examples)]
-        neg_nodes = torch.cat(neg_nodes) #[`total_n_triple`, n_neg]
+        neg_nodes = torch.cat(neg_nodes)  # [`total_n_triple`, n_neg]
         assert neg_nodes.dim() == 2
         assert pos_triples.size(1) == neg_nodes.size(0)
         return edge_index, edge_type, pos_triples, neg_nodes
@@ -96,21 +111,27 @@ class DRAGON(nn.Module):
         """
         bs, nc = inputs[0].size(0), inputs[0].size(1)
 
-        #Here, merge the batch dimension and the num_choice dimension
-        assert len(inputs) == 6 + 5 + 2 + 2  #6 lm_data, 5 gnn_data, (edge_index, edge_type), (pos_triples, neg_nodes)
+        # Here, merge the batch dimension and the num_choice dimension
+        assert len(inputs) == 6 + 5 + 2 + 2  # 6 lm_data, 5 gnn_data, (edge_index, edge_type), (pos_triples, neg_nodes)
         edge_index_orig, edge_type_orig = inputs[-2:]
-        _inputs = [x.reshape(x.size(0) * x.size(1), *x.size()[2:]) for x in inputs[:6]] + [x.reshape(x.size(0) * x.size(1), *x.size()[2:]) for x in inputs[6:11]] + [sum(x,[]) for x in inputs[11:15]]
+        _inputs = [x.reshape(x.size(0) * x.size(1), *x.size()[2:]) for x in inputs[:6]] + [
+            x.reshape(x.size(0) * x.size(1), *x.size()[2:]) for x in inputs[6:11]] + [sum(x, []) for x in inputs[11:15]]
 
         *lm_inputs, concept_ids, node_type_ids, node_scores, adj_lengths, special_nodes_mask, edge_index, edge_type, pos_triples, neg_nodes = _inputs
         # node_scores = torch.zeros_like(node_scores) #handled in LMGNN forward
-        edge_index, edge_type, pos_triples, neg_nodes = self.batch_graph(edge_index, edge_type, pos_triples, neg_nodes, concept_ids.size(1))
+        edge_index, edge_type, pos_triples, neg_nodes = self.batch_graph(edge_index, edge_type, pos_triples, neg_nodes,
+                                                                         concept_ids.size(1))
         device = node_type_ids.device
-        adj     = (edge_index.to(device), edge_type.to(device))
+        adj = (edge_index.to(device), edge_type.to(device))
         lp_data = (pos_triples.to(device), neg_nodes.to(device))
 
+        gnn_mask = torch.arange(node_type_ids.size(1), device=node_type_ids.device) <= adj_lengths.unsqueeze(
+            1)
+
         logits, lm_loss, link_losses = self.lmgnn(lm_inputs, concept_ids,
-                                    node_type_ids, node_scores, adj_lengths, special_nodes_mask, adj, lp_data,
-                                    emb_data=None, cache_output=cache_output)
+                                                  node_type_ids, node_scores, adj_lengths, special_nodes_mask, adj,
+                                                  lp_data, gnn_mask,
+                                                  emb_data=None, cache_output=cache_output)
         # logits: [bs * nc], lm_loss: scalar, link_losses: (scalar, scalar, scalar)
         if logits is not None:
             logits = logits.view(bs, nc)
@@ -119,7 +140,8 @@ class DRAGON(nn.Module):
         if not detail:
             return logits, lm_loss, link_losses
         else:
-            return logits, lm_loss, link_losses, concept_ids.view(bs, nc, -1), node_type_ids.view(bs, nc, -1), edge_index_orig, edge_type_orig
+            return logits, lm_loss, link_losses, concept_ids.view(bs, nc, -1), node_type_ids.view(bs, nc,
+                                                                                                  -1), edge_index_orig, edge_type_orig
             # edge_index_orig: list of (batch_size, num_choice). each entry is torch.tensor(2, E)
             # edge_type_orig: list of (batch_size, num_choice). each entry is torch.tensor(E, )
 
@@ -164,7 +186,6 @@ def test_DRAGON(device):
     model.check_outputs(*outputs)
 
 
-
 class LMGNN(PreTrainedModelClass):
 
     def __init__(self, config, args={}, model_name="roberta-large", k=5, n_ntype=4, n_etype=38,
@@ -183,10 +204,13 @@ class LMGNN(PreTrainedModelClass):
         self.n_attention_head = n_attention_head
         self.activation = layers.GELU()
         if k >= 0:
-            self.concept_emb = layers.CustomizedEmbedding(concept_num=n_concept, concept_out_dim=concept_dim, use_contextualized=False, concept_in_dim=concept_in_dim, pretrained_concept_emb=pretrained_concept_emb, freeze_ent_emb=freeze_ent_emb)
+            self.concept_emb = layers.CustomizedEmbedding(concept_num=n_concept, concept_out_dim=concept_dim,
+                                                          use_contextualized=False, concept_in_dim=concept_in_dim,
+                                                          pretrained_concept_emb=pretrained_concept_emb,
+                                                          freeze_ent_emb=freeze_ent_emb)
             self.pooler = layers.MultiheadAttPoolLayer(n_attention_head, config.hidden_size, concept_dim)
 
-        concat_vec_dim = concept_dim * 2 + config.hidden_size if k>=0 else config.hidden_size
+        concat_vec_dim = concept_dim * 2 + config.hidden_size if k >= 0 else config.hidden_size
         self.fc = layers.MLP(concat_vec_dim, fc_dim, 1, n_fc_layer, p_fc, layer_norm=True)
 
         self.dropout_e = nn.Dropout(p_emb)
@@ -196,11 +220,17 @@ class LMGNN(PreTrainedModelClass):
             self.apply(self._init_weights)
 
         if INHERIT_BERT:
-            self.bert = TextKGMessagePassing(config, args=args, k=k, n_ntype=n_ntype, n_etype=n_etype, dropout=p_gnn, concept_dim=concept_dim, ie_dim=ie_dim, p_fc=p_fc, info_exchange=info_exchange, ie_layer_num=ie_layer_num, sep_ie_layers=sep_ie_layers) #this is equivalent to BertModel
+            self.bert = TextKGMessagePassing(config, args=args, k=k, n_ntype=n_ntype, n_etype=n_etype, dropout=p_gnn,
+                                             concept_dim=concept_dim, ie_dim=ie_dim, p_fc=p_fc,
+                                             info_exchange=info_exchange, ie_layer_num=ie_layer_num,
+                                             sep_ie_layers=sep_ie_layers)  # this is equivalent to BertModel
             if args.mlm_task:
                 self.cls = modeling_bert.BertPreTrainingHeads(config)
         else:
-            self.roberta = TextKGMessagePassing(config, args=args, k=k, n_ntype=n_ntype, n_etype=n_etype, dropout=p_gnn, concept_dim=concept_dim, ie_dim=ie_dim, p_fc=p_fc, info_exchange=info_exchange, ie_layer_num=ie_layer_num, sep_ie_layers=sep_ie_layers) #this is equivalent to RobertaModel
+            self.roberta = TextKGMessagePassing(config, args=args, k=k, n_ntype=n_ntype, n_etype=n_etype, dropout=p_gnn,
+                                                concept_dim=concept_dim, ie_dim=ie_dim, p_fc=p_fc,
+                                                info_exchange=info_exchange, ie_layer_num=ie_layer_num,
+                                                sep_ie_layers=sep_ie_layers)  # this is equivalent to RobertaModel
             if args.mlm_task:
                 self.lm_head = modeling_roberta.RobertaLMHead(config)
 
@@ -230,7 +260,9 @@ class LMGNN(PreTrainedModelClass):
             module.bias.data.zero_()
             module.weight.data.fill_(1.0)
 
-    def forward(self, inputs, concept_ids, node_type_ids, node_scores, adj_lengths, special_nodes_mask, adj, lp_data, emb_data=None, cache_output=False):
+    def forward(self, inputs, concept_ids, node_type_ids, node_scores, adj_lengths, special_nodes_mask, adj, lp_data,
+                gnn_mask,
+                emb_data=None, cache_output=False):
         """
         concept_ids: (batch_size, n_node)
         adj_lengths: (batch_size,)
@@ -243,7 +275,7 @@ class LMGNN(PreTrainedModelClass):
         returns:
         logits: [bs]
         """
-        #LM inputs
+        # LM inputs
         lm_input_ids, lm_labels, input_ids, attention_mask, token_type_ids, output_mask = inputs
         if self.args.mlm_task:
             input_ids = lm_input_ids
@@ -253,36 +285,40 @@ class LMGNN(PreTrainedModelClass):
         if self.k >= 0:
             gnn_input = self.concept_emb(concept_ids - 1, emb_data).to(node_type_ids.device)
         else:
-            gnn_input = torch.zeros((concept_ids.size(0), concept_ids.size(1), self.concept_dim)).float().to(node_type_ids.device)
+            gnn_input = torch.zeros((concept_ids.size(0), concept_ids.size(1), self.concept_dim)).float().to(
+                node_type_ids.device)
         gnn_input[:, 0] = 0
-        gnn_input = self.dropout_e(gnn_input) #(batch_size, n_node, dim_node)
+        gnn_input = self.dropout_e(gnn_input)  # (batch_size, n_node, dim_node)
 
-        #Normalize node sore (use norm from Z)
+        # Normalize node sore (use norm from Z)
         if self.args.no_node_score:
             node_scores = node_scores.new_zeros(node_scores.size())
         else:
-            _mask = (torch.arange(node_scores.size(1), device=node_scores.device) < adj_lengths.unsqueeze(1)).float() #0 means masked out #[batch_size, n_node]
+            _mask = (torch.arange(node_scores.size(1), device=node_scores.device) < adj_lengths.unsqueeze(
+                1)).float()  # 0 means masked out #[batch_size, n_node]
             node_scores = -node_scores
-            node_scores = node_scores - node_scores[:, 0:1, :] #[batch_size, n_node, 1]
-            node_scores = node_scores.squeeze(2) #[batch_size, n_node]
+            node_scores = node_scores - node_scores[:, 0:1, :]  # [batch_size, n_node, 1]
+            node_scores = node_scores.squeeze(2)  # [batch_size, n_node]
             node_scores = node_scores * _mask
-            mean_norm  = (torch.abs(node_scores)).sum(dim=1) / adj_lengths  #[batch_size, ]
-            node_scores = node_scores / (mean_norm.unsqueeze(1) + 1e-05) #[batch_size, n_node]
-            node_scores = node_scores.unsqueeze(2) #[batch_size, n_node, 1]
+            mean_norm = (torch.abs(node_scores)).sum(dim=1) / adj_lengths  # [batch_size, ]
+            node_scores = node_scores / (mean_norm.unsqueeze(1) + 1e-05)  # [batch_size, n_node]
+            node_scores = node_scores.unsqueeze(2)  # [batch_size, n_node, 1]
 
         if INHERIT_BERT:
             bert_or_roberta = self.bert
         else:
             bert_or_roberta = self.roberta
         # Merged core
-        lm_outputs, gnn_output = bert_or_roberta(input_ids, token_type_ids, attention_mask, output_mask, gnn_input, adj, node_type_ids, node_scores, special_nodes_mask, output_hidden_states=True)
+        lm_outputs, gnn_output = bert_or_roberta(input_ids, token_type_ids, attention_mask, output_mask, gnn_input, adj,
+                                                 node_type_ids, node_scores, special_nodes_mask, gnn_mask,
+                                                 output_hidden_states=True)
         # lm_outputs: ([bs, seq_len, sent_dim], [bs, sent_dim], ([bs, seq_len, sent_dim] for _ in range(25)))
         # gnn_output: [bs, n_node, dim_node]
 
         # LM outputs
-        all_hidden_states = lm_outputs[-1] # ([bs, seq_len, sent_dim] for _ in range(25))
-        lm_hidden_states = all_hidden_states[self.layer_id] # [bs, seq_len, sent_dim]
-        sent_vecs = bert_or_roberta.pooler(lm_hidden_states) # [bs, sent_dim]
+        all_hidden_states = lm_outputs[-1]  # ([bs, seq_len, sent_dim] for _ in range(25))
+        lm_hidden_states = all_hidden_states[self.layer_id]  # [bs, seq_len, sent_dim]
+        sent_vecs = bert_or_roberta.pooler(lm_hidden_states)  # [bs, sent_dim]
 
         # sent_token_mask = output_mask.clone()
         # sent_token_mask[:, 0] = 0
@@ -293,7 +329,7 @@ class LMGNN(PreTrainedModelClass):
             if INHERIT_BERT:
                 prediction_scores, seq_relationship_score = self.cls(lm_hidden_states, sent_vecs)
                 masked_lm_loss = loss_fct(prediction_scores.view(_bs * _seq_len, -1), lm_labels.view(-1))
-                next_sentence_loss = 0. #loss_fct(seq_relationship_score.view(-1, 2), next_sentence_label.view(-1))
+                next_sentence_loss = 0.  # loss_fct(seq_relationship_score.view(-1, 2), next_sentence_label.view(-1))
                 lm_loss = masked_lm_loss + next_sentence_loss
             else:
                 prediction_scores = self.lm_head(lm_hidden_states)
@@ -302,28 +338,28 @@ class LMGNN(PreTrainedModelClass):
             lm_loss = 0.
 
         # GNN outputs
-        Z_vecs = gnn_output[:,0]   #(batch_size, dim_node)
+        Z_vecs = gnn_output[:, 0]  # (batch_size, dim_node)
 
-        node_mask = torch.arange(node_type_ids.size(1), device=node_type_ids.device) >= adj_lengths.unsqueeze(1) #[bs, nodes] 1 means masked out
+        node_mask = torch.arange(node_type_ids.size(1), device=node_type_ids.device) >= adj_lengths.unsqueeze(
+            1)  # [bs, nodes] 1 means masked out
         gnn_output = gnn_output * (~node_mask).float().unsqueeze(2)
-        node_mask = node_mask | (node_type_ids == 3) # pool over all KG nodes (excluding the context node)
+        node_mask = node_mask | (node_type_ids == 3)  # pool over all KG nodes (excluding the context node)
         node_mask[node_mask.all(1), 0] = 0  # a temporary solution to avoid zero node
-
 
         # sent_node_mask = special_nodes_mask.clone()
         # sent_node_mask[:, 0] = 0
 
         if self.args.link_task:
-            pos_triples, neg_nodes = lp_data #pos_triples: [3, `total_n_triple`],  neg_nodes: [`total_n_triple`, n_neg]
+            pos_triples, neg_nodes = lp_data  # pos_triples: [3, `total_n_triple`],  neg_nodes: [`total_n_triple`, n_neg]
 
-            pos_samples = pos_triples #[3, `total_n_triple`]
+            pos_samples = pos_triples  # [3, `total_n_triple`]
 
             _n_neg = neg_nodes.size(1)
-            head_negative_sample = neg_nodes[:, :_n_neg//2]             #[`total_n_triple`, n_neg//2]
-            tail_negative_sample = neg_nodes[:, _n_neg//2:_n_neg//2*2]  #[`total_n_triple`, n_neg//2]
+            head_negative_sample = neg_nodes[:, :_n_neg // 2]  # [`total_n_triple`, n_neg//2]
+            tail_negative_sample = neg_nodes[:, _n_neg // 2:_n_neg // 2 * 2]  # [`total_n_triple`, n_neg//2]
 
             _bs, _, gnn_dim = gnn_output.size()
-            embs = gnn_output.view(-1, gnn_dim) #[`total_n_nodes`, gnn_dim]
+            embs = gnn_output.view(-1, gnn_dim)  # [`total_n_nodes`, gnn_dim]
 
             if self.args.link_proj_headtail:
                 embs = self.linkpred_proj(embs)
@@ -334,10 +370,10 @@ class LMGNN(PreTrainedModelClass):
             elif self.args.link_normalize_headtail == 3:
                 embs = self.emb_LayerNorm(embs)
 
-            positive_score  = self.linkpred(embs, pos_samples) #[`total_n_triple`, 1]
+            positive_score = self.linkpred(embs, pos_samples)  # [`total_n_triple`, 1]
             head_neg_scores = self.linkpred(embs, (pos_samples, head_negative_sample), mode='head-batch')
             tail_neg_scores = self.linkpred(embs, (pos_samples, tail_negative_sample), mode='tail-batch')
-            negative_score = torch.cat([head_neg_scores, tail_neg_scores], dim=-1) #[`total_n_triple`, total_n_neg]
+            negative_score = torch.cat([head_neg_scores, tail_neg_scores], dim=-1)  # [`total_n_triple`, total_n_neg]
             scores = (positive_score, negative_score)
 
             link_loss, pos_link_loss, neg_link_loss = self.linkpred.loss(scores)
@@ -348,11 +384,12 @@ class LMGNN(PreTrainedModelClass):
         if self.args.end_task:
             sent_vecs_for_pooler = sent_vecs
             if self.k >= 0:
-                graph_vecs, pool_attn = self.pooler(sent_vecs_for_pooler, gnn_output, node_mask) #graph_vecs: [bs, node_dim]
+                graph_vecs, pool_attn = self.pooler(sent_vecs_for_pooler, gnn_output,
+                                                    node_mask)  # graph_vecs: [bs, node_dim]
                 concat_pool = torch.cat((graph_vecs, sent_vecs, Z_vecs), 1)
             else:
                 concat_pool = sent_vecs
-            logits = self.fc(self.dropout_fc(concat_pool)) #[bs, 1]
+            logits = self.fc(self.dropout_fc(concat_pool))  # [bs, 1]
         else:
             logits = None
 
@@ -700,11 +737,13 @@ if INHERIT_BERT:
     ModelClass = modeling_bert.BertModel
 else:
     ModelClass = modeling_roberta.RobertaModel
-print ('ModelClass', ModelClass)
+print('ModelClass', ModelClass)
+
 
 class TextKGMessagePassing(ModelClass):
 
-    def __init__(self, config, args={}, k=5, n_ntype=4, n_etype=38, dropout=0.2, concept_dim=200, ie_dim=200, p_fc=0.2, info_exchange=True, ie_layer_num=1, sep_ie_layers=False):
+    def __init__(self, config, args={}, k=5, n_ntype=4, n_etype=38, dropout=0.2, concept_dim=200, ie_dim=200, p_fc=0.2,
+                 info_exchange=True, ie_layer_num=1, sep_ie_layers=False):
         super().__init__(config=config)
 
         self.n_ntype = n_ntype
@@ -713,7 +752,7 @@ class TextKGMessagePassing(ModelClass):
         self.hidden_size = concept_dim
         self.emb_node_type = nn.Linear(self.n_ntype, concept_dim // 2)
 
-        self.basis_f = 'sin' #['id', 'linact', 'sin', 'none']
+        self.basis_f = 'sin'  # ['id', 'linact', 'sin', 'none']
         if self.basis_f in ['id']:
             self.emb_score = nn.Linear(1, concept_dim // 2)
         elif self.basis_f in ['linact']:
@@ -731,11 +770,15 @@ class TextKGMessagePassing(ModelClass):
         self.dropout = nn.Dropout(dropout)
         self.dropout_rate = dropout
 
-        self.encoder = RoBERTaGAT(config, args, k=k, n_ntype=n_ntype, n_etype=n_etype, hidden_size=concept_dim, dropout=dropout, concept_dim=concept_dim, ie_dim=ie_dim, p_fc=p_fc, info_exchange=info_exchange, ie_layer_num=ie_layer_num, sep_ie_layers=sep_ie_layers)
+        self.encoder = RoBERTaGAT(config, args, k=k, n_ntype=n_ntype, n_etype=n_etype, hidden_size=concept_dim,
+                                  dropout=dropout, concept_dim=concept_dim, ie_dim=ie_dim, p_fc=p_fc,
+                                  info_exchange=info_exchange, ie_layer_num=ie_layer_num, sep_ie_layers=sep_ie_layers)
 
         self.sent_dim = config.hidden_size
 
-    def forward(self, input_ids, token_type_ids, attention_mask, special_tokens_mask, H, A, node_type, node_score, special_nodes_mask, cache_output=False, position_ids=None, head_mask=None, output_hidden_states=True):
+    def forward(self, input_ids, token_type_ids, attention_mask, special_tokens_mask, H, A, node_type, node_score,
+                special_nodes_mask, gnn_mask, cache_output=False, position_ids=None, head_mask=None,
+                output_hidden_states=True):
         """
         input_ids: [bs, seq_len]
         token_type_ids: [bs, seq_len]
@@ -772,7 +815,7 @@ class TextKGMessagePassing(ModelClass):
         # positions we want to attend and -10000.0 for masked positions.
         # Since we are adding it to the raw scores before the softmax, this is
         # effectively the same as removing these entirely.
-        extended_attention_mask = extended_attention_mask.to(dtype=next(self.parameters()).dtype) # fp16 compatibility
+        extended_attention_mask = extended_attention_mask.to(dtype=next(self.parameters()).dtype)  # fp16 compatibility
         extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
 
         # Prepare head mask if needed
@@ -785,8 +828,10 @@ class TextKGMessagePassing(ModelClass):
                 head_mask = head_mask.unsqueeze(0).unsqueeze(0).unsqueeze(-1).unsqueeze(-1)
                 head_mask = head_mask.expand(self.config.num_hidden_layers, -1, -1, -1, -1)
             elif head_mask.dim() == 2:
-                head_mask = head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(-1)  # We can specify head_mask for each layer
-            head_mask = head_mask.to(dtype=next(self.parameters()).dtype) # switch to fload if need + fp16 compatibility
+                head_mask = head_mask.unsqueeze(1).unsqueeze(-1).unsqueeze(
+                    -1)  # We can specify head_mask for each layer
+            head_mask = head_mask.to(
+                dtype=next(self.parameters()).dtype)  # switch to fload if need + fp16 compatibility
         else:
             head_mask = [None] * self.config.num_hidden_layers
 
@@ -795,42 +840,49 @@ class TextKGMessagePassing(ModelClass):
         # GNN inputs
         _batch_size, _n_nodes = node_type.size()
 
-        #Embed type
-        T = modeling_gnn.make_one_hot(node_type.view(-1).contiguous(), self.n_ntype).view(_batch_size, _n_nodes, self.n_ntype)
-        node_type_emb = self.activation(self.emb_node_type(T)) #[batch_size, n_node, dim/2]
+        # Embed type
+        T = modeling_gnn.make_one_hot(node_type.view(-1).contiguous(), self.n_ntype).view(_batch_size, _n_nodes,
+                                                                                          self.n_ntype)
+        node_type_emb = self.activation(self.emb_node_type(T))  # [batch_size, n_node, dim/2]
 
-        #Embed score
+        # Embed score
         if self.basis_f == 'sin':
-            js = torch.arange(self.hidden_size//2).unsqueeze(0).unsqueeze(0).float().to(node_type.device) #[1,1,dim/2]
-            js = torch.pow(1.1, js) #[1,1,dim/2]
-            B = torch.sin(js * node_score) #[batch_size, n_node, dim/2]
-            node_score_emb = self.activation(self.emb_score(B)) #[batch_size, n_node, dim/2]
+            js = torch.arange(self.hidden_size // 2).unsqueeze(0).unsqueeze(0).float().to(
+                node_type.device)  # [1,1,dim/2]
+            js = torch.pow(1.1, js)  # [1,1,dim/2]
+            B = torch.sin(js * node_score)  # [batch_size, n_node, dim/2]
+            node_score_emb = self.activation(self.emb_score(B))  # [batch_size, n_node, dim/2]
         elif self.basis_f == 'id':
             B = node_score
-            node_score_emb = self.activation(self.emb_score(B)) #[batch_size, n_node, dim/2]
+            node_score_emb = self.activation(self.emb_score(B))  # [batch_size, n_node, dim/2]
         elif self.basis_f == 'linact':
-            B = self.activation(self.B_lin(node_score)) #[batch_size, n_node, dim/2]
-            node_score_emb = self.activation(self.emb_score(B)) #[batch_size, n_node, dim/2]
-
+            B = self.activation(self.B_lin(node_score))  # [batch_size, n_node, dim/2]
+            node_score_emb = self.activation(self.emb_score(B))  # [batch_size, n_node, dim/2]
 
         X = H
-        edge_index, edge_type = A #edge_index: [2, total_E]   edge_type: [total_E, ]  where total_E is for the batched graph
-        _X = X.view(-1, X.size(2)).contiguous() #[`total_n_nodes`, d_node] where `total_n_nodes` = b_size * n_node
-        _node_type = node_type.view(-1).contiguous() #[`total_n_nodes`, ]
-        _node_feature_extra = torch.cat([node_type_emb, node_score_emb], dim=2).view(_node_type.size(0), -1).contiguous() #[`total_n_nodes`, dim]
+        edge_index, edge_type = A  # edge_index: [2, total_E]   edge_type: [total_E, ]  where total_E is for the batched graph
+        _X = X.view(-1, X.size(2)).contiguous()  # [`total_n_nodes`, d_node] where `total_n_nodes` = b_size * n_node
+        _node_type = node_type.view(-1).contiguous()  # [`total_n_nodes`, ]
+        _node_feature_extra = torch.cat([node_type_emb, node_score_emb], dim=2).view(_node_type.size(0),
+                                                                                     -1).contiguous()  # [`total_n_nodes`, dim]
 
         # Merged core
         encoder_outputs, _X = self.encoder(embedding_output,
-                                       extended_attention_mask, special_tokens_mask, head_mask, _X, edge_index, edge_type, _node_type, _node_feature_extra, special_nodes_mask, output_hidden_states=output_hidden_states)
+                                           extended_attention_mask, attention_mask, gnn_mask, special_tokens_mask,
+                                           head_mask, _X,
+                                           edge_index,
+                                           edge_type, _node_type, _node_feature_extra, special_nodes_mask,
+                                           output_hidden_states=output_hidden_states)
 
         # LM outputs
         sequence_output = encoder_outputs[0]
         pooled_output = self.pooler(sequence_output)
 
-        outputs = (sequence_output, pooled_output,) + encoder_outputs[1:]  # add hidden_states and attentions if they are here
+        outputs = (sequence_output, pooled_output,) + encoder_outputs[
+                                                      1:]  # add hidden_states and attentions if they are here
 
         # GNN outputs
-        X = _X.view(node_type.size(0), node_type.size(1), -1) #[batch_size, n_node, dim]
+        X = _X.view(node_type.size(0), node_type.size(1), -1)  # [batch_size, n_node, dim]
 
         output = self.activation(self.Vh(H) + self.Vx(X))
         output = self.dropout(output)
@@ -1156,7 +1208,7 @@ class TextKGMessagePassing(ModelClass):
         node_type[:, 0] = 3
         node_score = torch.zeros([bs, n_node, 1]).to(device)
         node_score[:, 1] = 180
-        return input_ids, token_type_ids, attention_mask, H, A,  node_type, node_score
+        return input_ids, token_type_ids, attention_mask, H, A, node_type, node_score
 
     def check_outputs(self, outputs, gnn_output):
         bs = 20
@@ -1174,11 +1226,14 @@ def test_TextKGMessagePassing(device):
 
 
 from modeling.modeling_bert_custom import BertEncoder
+
+
 # modeling_bert.BertEncoder
 
 class RoBERTaGAT(BertEncoder):
 
-    def __init__(self, config, args, k=5, n_ntype=4, n_etype=38, hidden_size=200, dropout=0.2, concept_dim=200, ie_dim=200, p_fc=0.2, info_exchange=True, ie_layer_num=1, sep_ie_layers=False):
+    def __init__(self, config, args, k=5, n_ntype=4, n_etype=38, hidden_size=200, dropout=0.2, concept_dim=200,
+                 ie_dim=200, p_fc=0.2, info_exchange=True, ie_layer_num=1, sep_ie_layers=False):
 
         super().__init__(config, args)
 
@@ -1188,22 +1243,37 @@ class RoBERTaGAT(BertEncoder):
         self.num_hidden_layers = config.num_hidden_layers
         self.info_exchange = info_exchange
         if k >= 1:
-            self.edge_encoder = torch.nn.Sequential(torch.nn.Linear(n_etype + 1 + n_ntype * 2, hidden_size), torch.nn.BatchNorm1d(hidden_size), torch.nn.ReLU(), torch.nn.Linear(hidden_size, hidden_size))
-            self.gnn_layers = nn.ModuleList([modeling_gnn.GATConvE(args, hidden_size, n_ntype, n_etype, self.edge_encoder) for _ in range(k)])
+            self.edge_encoder = torch.nn.Sequential(torch.nn.Linear(n_etype + 1 + n_ntype * 2, hidden_size),
+                                                    torch.nn.BatchNorm1d(hidden_size), torch.nn.ReLU(),
+                                                    torch.nn.Linear(hidden_size, hidden_size))
+            self.gnn_layers = nn.ModuleList(
+                [modeling_gnn.GATConvE(args, hidden_size, n_ntype, n_etype, self.edge_encoder) for _ in range(k)])
             self.activation = layers.GELU()
             self.dropout_rate = dropout
 
             self.sent_dim = config.hidden_size
             self.sep_ie_layers = sep_ie_layers
             if sep_ie_layers:
-                self.ie_layers = nn.ModuleList([layers.MLP(self.sent_dim + concept_dim, ie_dim, self.sent_dim + concept_dim, ie_layer_num, p_fc) for _ in range(k)])
+                self.ie_layers = nn.ModuleList(
+                    [layers.MLP(self.sent_dim + concept_dim, ie_dim, self.sent_dim + concept_dim, ie_layer_num, p_fc)
+                     for _ in range(k)])
             else:
-                self.ie_layer = layers.MLP(self.sent_dim + concept_dim, ie_dim, self.sent_dim + concept_dim, ie_layer_num, p_fc)
+                self.ie_layer = layers.MLP(self.sent_dim + concept_dim, ie_dim, self.sent_dim + concept_dim,
+                                           ie_layer_num, p_fc)
             if self.args.residual_ie == 2:
                 self.ie_LayerNorm = nn.LayerNorm(self.sent_dim + concept_dim)
+            self.SKatts = CQAttention(block_hidden_dim=hidden_size)
+            self.attention_prj = torch.nn.Linear(hidden_size * 4, hidden_size, bias=False)
+            self.KSatts = CQAttention(block_hidden_dim=hidden_size)
+            self.hidden_states_prj = torch.nn.Linear(hidden_size * 4, hidden_size, bias=False)
 
+            self.nvec2svec = nn.Linear(hidden_size, self.sent_dim)
+            self.svec2nvec = nn.Linear(self.sent_dim, hidden_size)
 
-    def forward(self, hidden_states, attention_mask, special_tokens_mask, head_mask, _X, edge_index, edge_type, _node_type, _node_feature_extra, special_nodes_mask, output_attentions=False, output_hidden_states=True):
+    def forward(self, hidden_states, attention_mask, lm_mask, gnn_mask, special_tokens_mask, head_mask, _X, edge_index,
+                edge_type,
+                _node_type, _node_feature_extra, special_nodes_mask, output_attentions=False,
+                output_hidden_states=True):
         """
         hidden_states: [bs, seq_len, sent_dim]
         attention_mask: [bs, 1, 1, seq_len]
@@ -1234,13 +1304,14 @@ class RoBERTaGAT(BertEncoder):
                 gnn_layer_index = i - self.num_hidden_layers + self.k
                 _X = self.gnn_layers[gnn_layer_index](_X, edge_index, edge_type, _node_type, _node_feature_extra)
                 _X = self.activation(_X)
-                _X = F.dropout(_X, self.dropout_rate, training = self.training)
+                _X = F.dropout(_X, self.dropout_rate, training=self.training)
 
                 # Exchange info between LM and GNN hidden states (Modality interaction)
-                if self.info_exchange == True or (self.info_exchange == "every-other-layer" and (i - self.num_hidden_layers + self.k) % 2 == 0):
-                    X = _X.view(bs, -1, _X.size(1)) # [bs, max_num_nodes, node_dim]
-                    context_node_lm_feats = hidden_states[:, 0, :] # [bs, sent_dim]
-                    context_node_gnn_feats = X[:, 0, :] # [bs, node_dim]
+                if self.info_exchange == True or (
+                        self.info_exchange == "every-other-layer" and (i - self.num_hidden_layers + self.k) % 2 == 0):
+                    X = _X.view(bs, -1, _X.size(1))  # [bs, max_num_nodes, node_dim]
+                    context_node_lm_feats = hidden_states[:, 0, :]  # [bs, sent_dim]
+                    context_node_gnn_feats = X[:, 0, :]  # [bs, node_dim]
                     context_node_feats = torch.cat([context_node_lm_feats, context_node_gnn_feats], dim=1)
                     if self.sep_ie_layers:
                         _context_node_feats = self.ie_layers[gnn_layer_index](context_node_feats)
@@ -1252,10 +1323,26 @@ class RoBERTaGAT(BertEncoder):
                         context_node_feats = self.ie_LayerNorm(context_node_feats + _context_node_feats)
                     else:
                         context_node_feats = _context_node_feats
-                    context_node_lm_feats, context_node_gnn_feats = torch.split(context_node_feats, [context_node_lm_feats.size(1), context_node_gnn_feats.size(1)], dim=1)
+                    context_node_lm_feats, context_node_gnn_feats = torch.split(context_node_feats,
+                                                                                [context_node_lm_feats.size(1),
+                                                                                 context_node_gnn_feats.size(1)], dim=1)
                     hidden_states[:, 0, :] = context_node_lm_feats
                     X[:, 0, :] = context_node_gnn_feats
+
+                    hidden_states_node = hidden_states.clone()
+                    hidden_states_node = self.activation(self.svec2nvec(hidden_states_node))
+
+                    X_copy = X.clone()
+                    X, lm_node_scores = self.SKatts(X, hidden_states_node, gnn_mask, lm_mask, return_att=True)
+                    X = self.attention_prj(X)
                     _X = X.view_as(_X)
+
+                    ### KG to LM
+                    hidden_states_node = self.KSatts(hidden_states_node, X_copy, lm_mask, gnn_mask, return_att=False)
+                    hidden_states_node = self.hidden_states_prj(hidden_states_node)
+
+                    hidden_states_node = self.activation(self.nvec2svec(hidden_states_node))
+                    hidden_states = self.activation(hidden_states_node + hidden_states)
 
         # Add last layer
         if output_hidden_states:
@@ -1266,7 +1353,7 @@ class RoBERTaGAT(BertEncoder):
             outputs = outputs + (all_hidden_states,)
         if output_attentions:
             outputs = outputs + (all_attentions,)
-        return outputs, _X # last-layer hidden state, (all hidden states), (all attentions)
+        return outputs, _X  # last-layer hidden state, (all hidden states), (all attentions)
 
     def get_fake_inputs(self, device="cuda:0"):
         bs = 20

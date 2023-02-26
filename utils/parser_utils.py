@@ -17,8 +17,8 @@ DATASET_NO_TEST = []
 
 def add_data_arguments(parser):
     # arguments that all datasets share
-    parser.add_argument('--ent_emb_paths', default=['tzw'], nargs='+', help='sources for entity embeddings')
-    parser.add_argument('--kg_vocab_path', default="", help='kg vocab file')
+    parser.add_argument('--ent_emb_paths', default=['data/cpnet/tzw.ent.npy'], nargs='+', help='sources for entity embeddings')
+    parser.add_argument('--kg_vocab_path', default="data/cpnet/concept.txt", help='kg vocab file')
     # dataset specific
     parser.add_argument('-ds', '--dataset', default='csqa', help='dataset name')
     parser.add_argument('--data_dir', default='data', type=str, help='Path to the data directory')

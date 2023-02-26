@@ -50,7 +50,9 @@ random_ent_emb=false
 fp16=true
 upcast=true
 
-load_model_path=models/general_model.pt
+#load_model_path=models/general_model.pt
+load_model_path=models/model.pt.29
+
 
 echo "***** hyperparameters *****"
 echo "dataset: $dataset"
@@ -73,7 +75,7 @@ python3 -u dragon.py \
     --dataset $dataset \
     --encoder $encoder -k $k --gnn_dim $gnndim -elr $elr -dlr $dlr -bs $bs --seed $seed -mbs ${mbs} --unfreeze_epoch ${unfreeze_epoch} --encoder_layer=${encoder_layer} -sl ${max_seq_len} --max_node_num ${max_node_num} \
     --n_epochs $n_epochs --max_epochs_before_stop ${max_epochs_before_stop} --fp16 $fp16 --upcast $upcast --use_wandb true \
-    --save_dir ${save_dir_pref}/${dataset}/${run_name} --save_model 0 \
+    --save_dir ${save_dir_pref}/${dataset}/${run_name} --save_model 2 \
     --run_name ${run_name} \
     --load_model_path $load_model_path \
     --residual_ie $residual_ie \
