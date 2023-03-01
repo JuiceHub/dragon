@@ -19,7 +19,7 @@ mbs=2
 unfreeze_epoch=3
 k=5 #num of gnn layers
 residual_ie=2
-gnndim=1024
+gnndim=200
 
 
 encoder_layer=-1
