@@ -1312,13 +1312,13 @@ class RoBERTaGAT(BertEncoder):
 
                     X_copy = X.clone()
                     hidden_states_node = hidden_states.clone()
-                    # hidden_states_node = self.activation(self.svec2nvec(hidden_states_node))
+                    hidden_states_node = self.activation(self.svec2nvec(hidden_states_node))
 
                     X, lm_node_scores = self.SKatts(X, hidden_states_node, gnn_mask, lm_mask, return_att=True)
                     X = self.attention_prj(X)
 
-                    hidden_states = self.KSatts(hidden_states, X_copy, lm_mask, gnn_mask, return_att=False)
-                    hidden_states = self.hidden_states_prj(hidden_states)
+                    # hidden_states = self.KSatts(hidden_states, X_copy, lm_mask, gnn_mask, return_att=False)
+                    # hidden_states = self.hidden_states_prj(hidden_states)
 
                     context_node_lm_feats = hidden_states[:, 0, :]  # [bs, sent_dim]
                     context_node_gnn_feats = X[:, 0, :]  # [bs, node_dim]
