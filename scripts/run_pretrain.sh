@@ -1,6 +1,6 @@
 #!/bin/bash
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 export TOKENIZERS_PARALLELISM=true
 export OMP_NUM_THREADS=4
 dt=`date '+%Y%m%d_%H%M%S'`
@@ -19,7 +19,7 @@ mbs=2
 unfreeze_epoch=3
 k=5 #num of gnn layers
 residual_ie=2
-gnndim=200
+gnndim=1024
 
 
 encoder_layer=-1

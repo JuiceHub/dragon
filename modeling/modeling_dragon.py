@@ -1306,10 +1306,20 @@ class RoBERTaGAT(BertEncoder):
                 _X = self.activation(_X)
                 _X = F.dropout(_X, self.dropout_rate, training=self.training)
 
-                # Exchange info between LM and GNN hidden states (Modality interaction)
                 if self.info_exchange == True or (
                         self.info_exchange == "every-other-layer" and (i - self.num_hidden_layers + self.k) % 2 == 0):
                     X = _X.view(bs, -1, _X.size(1))  # [bs, max_num_nodes, node_dim]
+
+                    X_copy = X.clone()
+                    hidden_states_node = hidden_states.clone()
+                    # hidden_states_node = self.activation(self.svec2nvec(hidden_states_node))
+
+                    X, lm_node_scores = self.SKatts(X, hidden_states_node, gnn_mask, lm_mask, return_att=True)
+                    X = self.attention_prj(X)
+
+                    hidden_states = self.KSatts(hidden_states, X_copy, lm_mask, gnn_mask, return_att=False)
+                    hidden_states = self.hidden_states_prj(hidden_states)
+
                     context_node_lm_feats = hidden_states[:, 0, :]  # [bs, sent_dim]
                     context_node_gnn_feats = X[:, 0, :]  # [bs, node_dim]
                     context_node_feats = torch.cat([context_node_lm_feats, context_node_gnn_feats], dim=1)
@@ -1328,21 +1338,7 @@ class RoBERTaGAT(BertEncoder):
                                                                                  context_node_gnn_feats.size(1)], dim=1)
                     hidden_states[:, 0, :] = context_node_lm_feats
                     X[:, 0, :] = context_node_gnn_feats
-
-                    hidden_states_node = hidden_states.clone()
-                    hidden_states_node = self.activation(self.svec2nvec(hidden_states_node))
-
-                    X_copy = X.clone()
-                    X, lm_node_scores = self.SKatts(X, hidden_states_node, gnn_mask, lm_mask, return_att=True)
-                    X = self.attention_prj(X)
                     _X = X.view_as(_X)
-
-                    ### KG to LM
-                    hidden_states_node = self.KSatts(hidden_states_node, X_copy, lm_mask, gnn_mask, return_att=False)
-                    hidden_states_node = self.hidden_states_prj(hidden_states_node)
-
-                    hidden_states_node = self.activation(self.nvec2svec(hidden_states_node))
-                    hidden_states = self.activation(hidden_states_node + hidden_states)
 
         # Add last layer
         if output_hidden_states:

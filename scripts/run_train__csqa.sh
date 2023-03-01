@@ -51,7 +51,7 @@ fp16=true
 upcast=true
 
 #load_model_path=models/general_model.pt
-load_model_path=models/model.pt.28
+load_model_path=models/model.pt.29
 
 
 echo "***** hyperparameters *****"
