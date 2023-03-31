@@ -29,6 +29,14 @@ def make_one_hot(labels, C):
     return target
 
 
+from torch_geometric.nn import MessagePassing
+from torch_geometric.utils import add_self_loops, degree, softmax, remove_self_loops
+from torch_geometric.nn import global_add_pool, global_mean_pool, global_max_pool, GlobalAttention, Set2Set
+import torch.nn.functional as F
+from torch_scatter import scatter_add, scatter
+from torch_geometric.nn.inits import glorot, zeros
+
+
 class GATConvE(MessagePassing):
     """
     Args:
@@ -36,64 +44,85 @@ class GATConvE(MessagePassing):
         n_ntype (int): number of node types (e.g. 4)
         n_etype (int): number of edge relation types (e.g. 38)
     """
-    def __init__(self, args, emb_dim, n_ntype, n_etype, edge_encoder, head_count=4, aggr="add"):
+
+    def __init__(self, args, emb_dim, n_ntype, n_etype, edge_encoder, head_count=4, aggr="add",
+                 negative_slope: float = 0.2, dropout: float = 0.):
         super(GATConvE, self).__init__(aggr=aggr)
         self.args = args
 
         assert emb_dim % 2 == 0
         self.emb_dim = emb_dim
 
-        self.n_ntype = n_ntype; self.n_etype = n_etype
+        self.n_ntype = n_ntype;
+        self.n_etype = n_etype
         self.edge_encoder = edge_encoder
 
-        #For attention
+        # For attention
         self.head_count = head_count
         assert emb_dim % head_count == 0
         self.dim_per_head = emb_dim // head_count
-        self.linear_key = nn.Linear(3*emb_dim, head_count * self.dim_per_head)
-        self.linear_msg = nn.Linear(3*emb_dim, head_count * self.dim_per_head)
-        self.linear_query = nn.Linear(2*emb_dim, head_count * self.dim_per_head)
+        self.linear_key = nn.Linear(2 * emb_dim, head_count * self.dim_per_head)
+        self.linear_msg = nn.Linear(2 * emb_dim, head_count * self.dim_per_head)
+        self.linear_query = nn.Linear(1 * emb_dim, head_count * self.dim_per_head)
+        # self.linear_key = nn.Linear(int(2.5 * emb_dim), head_count * self.dim_per_head)
+        # self.linear_msg = nn.Linear(int(2.5 * emb_dim), head_count * self.dim_per_head)
+        # self.linear_query = nn.Linear(int(1.5 * emb_dim), head_count * self.dim_per_head)
 
         self._alpha = None
 
-        #For final MLP
-        self.mlp = torch.nn.Sequential(torch.nn.Linear(emb_dim, emb_dim), torch.nn.BatchNorm1d(emb_dim), torch.nn.ReLU(), torch.nn.Linear(emb_dim, emb_dim))
+        # For final MLP
+        self.mlp = torch.nn.Sequential(torch.nn.Linear(emb_dim, emb_dim), torch.nn.BatchNorm1d(emb_dim),
+                                       torch.nn.ReLU(), torch.nn.Linear(emb_dim, emb_dim))
 
+        # self.linear_k = nn.Linear(int(1.5 * emb_dim), head_count * self.dim_per_head)
+        # self.linear_q = nn.Linear(int(2.5 * emb_dim), head_count * self.dim_per_head)
+        # self.linear_msg = nn.Linear(int(2.5 * emb_dim), head_count * self.dim_per_head)
+
+        self.negative_slope = negative_slope
+        self.att = nn.Parameter(torch.Tensor(1, head_count, self.dim_per_head))
+        self.dropout = dropout
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        glorot(self.linear_key.weight)
+        glorot(self.linear_query.weight)
+        glorot(self.linear_msg.weight)
+        glorot(self.att)
 
     def forward(self, x, edge_index, edge_type, node_type, node_feature_extra, return_attention_weights=False):
-        """
-        x: [N, emb_dim]
-        edge_index: [2, E]
-        edge_type [E,] -> edge_attr: [E, 39] / self_edge_attr: [N, 39]
-        node_type [N,] -> headtail_attr [E, 8(=4+4)] / self_headtail_attr: [N, 8]
-        node_feature_extra [N, dim]
-        """
+        # x: [N, emb_dim]
+        # edge_index: [2, E]
+        # edge_type [E,] -> edge_attr: [E, 39] / self_edge_attr: [N, 39]
+        # node_type [N,] -> headtail_attr [E, 8(=4+4)] / self_headtail_attr: [N, 8]
+        # node_feature_extra [N, dim]
 
-        #Prepare edge feature
-        edge_vec = make_one_hot(edge_type, self.n_etype +1) #[E, 39]
-        self_edge_vec = torch.zeros(x.size(0), self.n_etype +1).to(edge_vec.device)
-        self_edge_vec[:,self.n_etype] = 1
+        # Prepare edge feature
+        edge_vec = make_one_hot(edge_type, self.n_etype + 1)  # [E, 39]
+        self_edge_vec = torch.zeros(x.size(0), self.n_etype + 1).to(edge_vec.device)
+        self_edge_vec[:, self.n_etype] = 1
 
-        head_type = node_type[edge_index[0]] #[E,] #head=src
-        tail_type = node_type[edge_index[1]] #[E,] #tail=tgt
-        head_vec = make_one_hot(head_type, self.n_ntype) #[E,4]
-        tail_vec = make_one_hot(tail_type, self.n_ntype) #[E,4]
-        headtail_vec = torch.cat([head_vec, tail_vec], dim=1) #[E,8]
-        self_head_vec = make_one_hot(node_type, self.n_ntype) #[N,4]
-        self_headtail_vec = torch.cat([self_head_vec, self_head_vec], dim=1) #[N,8]
+        head_type = node_type[edge_index[0]]  # [E,] #head=src
+        tail_type = node_type[edge_index[1]]  # [E,] #tail=tgt
+        head_vec = make_one_hot(head_type, self.n_ntype)  # [E,4]
+        tail_vec = make_one_hot(tail_type, self.n_ntype)  # [E,4]
+        headtail_vec = torch.cat([head_vec, tail_vec], dim=1)  # [E,8]
+        self_head_vec = make_one_hot(node_type, self.n_ntype)  # [N,4]
+        self_headtail_vec = torch.cat([self_head_vec, self_head_vec], dim=1)  # [N,8]
 
-        edge_vec = torch.cat([edge_vec, self_edge_vec], dim=0) #[E+N, ?]
-        headtail_vec = torch.cat([headtail_vec, self_headtail_vec], dim=0) #[E+N, ?]
-        edge_embeddings = self.edge_encoder(torch.cat([edge_vec, headtail_vec], dim=1)) #[E+N, emb_dim]
+        edge_vec = torch.cat([edge_vec, self_edge_vec], dim=0)  # [E+N, ?]
+        headtail_vec = torch.cat([headtail_vec, self_headtail_vec], dim=0)  # [E+N, ?]
+        edge_embeddings = self.edge_encoder(torch.cat([edge_vec, headtail_vec], dim=1))  # [E+N, emb_dim]
 
-        #Add self loops to edge_index
+        # remove self loops
+        # edge_index, _ = remove_self_loops(edge_index)
+        # Add self loops to edge_index
         loop_index = torch.arange(0, x.size(0), dtype=torch.long, device=edge_index.device)
         loop_index = loop_index.unsqueeze(0).repeat(2, 1)
-        edge_index = torch.cat([edge_index, loop_index], dim=1)  #[2, E+N]
+        edge_index = torch.cat([edge_index, loop_index], dim=1)  # [2, E+N]
 
-        x = torch.cat([x, node_feature_extra], dim=1)
+        # x = torch.cat([x, node_feature_extra], dim=1)
         x = (x, x)
-        aggr_out = self.propagate(edge_index, x=x, edge_attr=edge_embeddings) #[N, emb_dim]
+        aggr_out = self.propagate(edge_index, x=x, edge_attr=edge_embeddings)  # [N, emb_dim]
         out = self.mlp(aggr_out)
 
         alpha = self._alpha
@@ -105,40 +134,38 @@ class GATConvE(MessagePassing):
         else:
             return out
 
+    def message(self, edge_index, x_i, x_j, edge_attr, index, ptr, size_i):  # i: tgt, j:src
 
-    def message(self, edge_index, x_i, x_j, edge_attr): #i: tgt, j:src
-        assert len(edge_attr.size()) == 2
-        assert edge_attr.size(1) == self.emb_dim
-        assert x_i.size(1) == x_j.size(1) == 2*self.emb_dim
-        assert x_i.size(0) == x_j.size(0) == edge_attr.size(0) == edge_index.size(1)
+        # assert len(edge_attr.size()) == 2
+        # assert edge_attr.size(1) == self.emb_dim
+        # assert x_i.size(1) == x_j.size(1) == 1 * self.emb_dim
+        # assert x_i.size(0) == x_j.size(0) == edge_attr.size(0) == edge_index.size(1)
 
-        key   = self.linear_key(torch.cat([x_i, edge_attr], dim=1)).view(-1, self.head_count, self.dim_per_head) #[E, heads, _dim]
-        msg = self.linear_msg(torch.cat([x_j, edge_attr], dim=1)).view(-1, self.head_count, self.dim_per_head) #[E, heads, _dim]
-        query = self.linear_query(x_j).view(-1, self.head_count, self.dim_per_head) #[E, heads, _dim]
+        key = self.linear_key(torch.cat([x_i, edge_attr], dim=1)).view(-1, self.head_count,
+                                                                       self.dim_per_head)  # [E, heads, _dim]
+        msg = self.linear_msg(torch.cat([x_j, edge_attr], dim=1)).view(-1, self.head_count,
+                                                                       self.dim_per_head)  # [E, heads, _dim]
+        query = self.linear_query(x_j).view(-1, self.head_count, self.dim_per_head)  # [E, heads, _dim]
 
-        if self.args.fp16 and self.training and self.args.upcast:
-            with torch.cuda.amp.autocast(enabled=False):
-                query = query.float() / math.sqrt(self.dim_per_head)
-                scores = (query * key.float()).sum(dim=2) #[E, heads]
-        else:
-            query = query / math.sqrt(self.dim_per_head)
-            scores = (query * key).sum(dim=2) #[E, heads]
-
-        src_node_index = edge_index[0] #[E,]
-        alpha = softmax(scores, src_node_index) #[E, heads] #group by src side node
+        x = key + query
+        src_node_index = edge_index[0]  # [E,]
+        x = F.leaky_relu(x, self.negative_slope)
+        alpha = (x * self.att).sum(dim=-1)
+        # alpha = softmax(alpha, src_node_index)
+        alpha = softmax(alpha, index, ptr, size_i)
         self._alpha = alpha
+        alpha = F.dropout(alpha, p=self.dropout, training=self.training)
 
-        #adjust by outgoing degree of src
-        E = edge_index.size(1)            #n_edges
-        N = int(src_node_index.max()) + 1 #n_nodes
+        # adjust by outgoing degree of src
+        E = edge_index.size(1)  # n_edges
+        N = int(src_node_index.max()) + 1  # n_nodes
         ones = torch.full((E,), 1.0, dtype=torch.float).to(edge_index.device)
-        src_node_edge_count = scatter(ones, src_node_index, dim=0, dim_size=N, reduce='sum')[src_node_index] #[E,]
+        src_node_edge_count = scatter(ones, src_node_index, dim=0, dim_size=N, reduce='sum')[src_node_index]  # [E,]
         assert len(src_node_edge_count.size()) == 1 and len(src_node_edge_count) == E
-        alpha = alpha * src_node_edge_count.unsqueeze(1) #[E, heads]
+        alpha = alpha * src_node_edge_count.unsqueeze(1)  # [E, heads]
 
-        out = msg * alpha.view(-1, self.head_count, 1) #[E, heads, _dim]
-        return out.view(-1, self.head_count * self.dim_per_head)  #[E, emb_dim]
-
+        out = msg * alpha.view(-1, self.head_count, 1)  # [E, heads, _dim]
+        return out.view(-1, self.head_count * self.dim_per_head)  # [E, emb_dim]
 
 
 class Decoder(nn.Module):
@@ -154,7 +181,6 @@ class Decoder(nn.Module):
         self.adversarial_temperature = args.link_negative_adversarial_sampling_temperature
         self.reg_param = args.link_regularizer_weight
 
-
     def forward(self, embs, sample, mode='single'):
         """
         Forward function that calculate the score of a batch of triples.
@@ -169,17 +195,17 @@ class Decoder(nn.Module):
         if mode == 'single':
             batch_size, negative_sample_size = sample[0].shape[0], 1
 
-            head = embs[sample[0]].unsqueeze(1) #[n_triple, 1, dim]
-            relation = self.w_relation[sample[1]].unsqueeze(1) #[n_triple, 1, dim]
-            tail = embs[sample[2]].unsqueeze(1) #[n_triple, 1, dim]
+            head = embs[sample[0]].unsqueeze(1)  # [n_triple, 1, dim]
+            relation = self.w_relation[sample[1]].unsqueeze(1)  # [n_triple, 1, dim]
+            tail = embs[sample[2]].unsqueeze(1)  # [n_triple, 1, dim]
 
         elif mode == 'head-batch':
             tail_part, head_part = sample
             batch_size, negative_sample_size = head_part.shape
 
-            head = embs[head_part] #[n_triple, n_neg, dim]
-            relation = self.w_relation[tail_part[1]].unsqueeze(1) #[n_triple, 1, dim]
-            tail = embs[tail_part[2]].unsqueeze(1) #[n_triple, 1, dim]
+            head = embs[head_part]  # [n_triple, n_neg, dim]
+            relation = self.w_relation[tail_part[1]].unsqueeze(1)  # [n_triple, 1, dim]
+            tail = embs[tail_part[2]].unsqueeze(1)  # [n_triple, 1, dim]
 
         elif mode == 'tail-batch':
             head_part, tail_part = sample
@@ -193,7 +219,7 @@ class Decoder(nn.Module):
         else:
             raise ValueError('mode %s not supported' % mode)
 
-        score = self.score(head, relation, tail, mode) #[n_triple, 1 or n_neg]
+        score = self.score(head, relation, tail, mode)  # [n_triple, 1 or n_neg]
 
         return score
 
@@ -213,16 +239,16 @@ class Decoder(nn.Module):
             negative_score = (F.softmax(negative_score * self.adversarial_temperature, dim=1).detach()
                               * F.logsigmoid(-negative_score)).sum(dim=1)
         else:
-            negative_score = F.logsigmoid(-negative_score).mean(dim=1) #[n_triple,]
+            negative_score = F.logsigmoid(-negative_score).mean(dim=1)  # [n_triple,]
 
-        positive_score = F.logsigmoid(positive_score).squeeze(dim=1) #[n_triple,]
+        positive_score = F.logsigmoid(positive_score).squeeze(dim=1)  # [n_triple,]
 
         assert positive_score.dim() == 1
         if len(positive_score) == 0:
             positive_sample_loss = negative_sample_loss = 0.
         else:
-            positive_sample_loss = - positive_score.mean() #scalar
-            negative_sample_loss = - negative_score.mean() #scalar
+            positive_sample_loss = - positive_score.mean()  # scalar
+            negative_sample_loss = - negative_score.mean()  # scalar
 
         loss = (positive_sample_loss + negative_sample_loss) / 2 + self.reg_param * self.reg_loss()
 
@@ -244,13 +270,12 @@ class TransEDecoder(Decoder):
             dist_ord = 2
         self.dist_ord = dist_ord
 
-        print (f"Initializing w_relation for TransEDecoder... (gamma={self.gamma})", file=sys.stderr)
+        print(f"Initializing w_relation for TransEDecoder... (gamma={self.gamma})", file=sys.stderr)
         self.epsilon = 2.0
         self.register_parameter('w_relation', nn.Parameter(torch.Tensor(self.num_relations, self.embedding_dim)))
         self.embedding_range = (self.gamma + self.epsilon) / self.embedding_dim
         with torch.no_grad():
             self.w_relation.uniform_(-self.embedding_range, self.embedding_range)
-
 
     def score(self, head, relation, tail, mode):
         """
@@ -280,15 +305,15 @@ class DistMultDecoder(Decoder):
     """DistMult score function
         Paper link: https://arxiv.org/abs/1412.6575
     """
+
     def __init__(self, args, num_rels, h_dim):
         super().__init__(args, num_rels, h_dim)
 
-        print ("Initializing w_relation for DistMultDecoder...", file=sys.stderr)
+        print("Initializing w_relation for DistMultDecoder...", file=sys.stderr)
         self.register_parameter('w_relation', nn.Parameter(torch.Tensor(self.num_relations, self.embedding_dim)))
         self.embedding_range = math.sqrt(1.0 / self.embedding_dim)
         with torch.no_grad():
             self.w_relation.uniform_(-self.embedding_range, self.embedding_range)
-
 
     def score(self, head, relation, tail, mode):
         if mode == 'head-batch':
@@ -319,13 +344,12 @@ class RotatEDecoder(Decoder):
 
         self.gamma = self.args.link_gamma
 
-        print (f"Initializing w_relation for RotatEDecoder... (gamma={self.gamma})", file=sys.stderr)
+        print(f"Initializing w_relation for RotatEDecoder... (gamma={self.gamma})", file=sys.stderr)
         self.epsilon = 2.0
-        self.register_parameter('w_relation', nn.Parameter(torch.Tensor(self.num_relations, self.embedding_dim //2)))
+        self.register_parameter('w_relation', nn.Parameter(torch.Tensor(self.num_relations, self.embedding_dim // 2)))
         self.embedding_range = (self.gamma + self.epsilon) / self.embedding_dim
         with torch.no_grad():
             self.w_relation.uniform_(-self.embedding_range, self.embedding_range)
-
 
     def score(self, head, relation, tail, mode):
         """
@@ -335,15 +359,14 @@ class RotatEDecoder(Decoder):
         head = head * self.embedding_range / math.sqrt(3.0)
         tail = tail * self.embedding_range / math.sqrt(3.0)
 
-
         pi = 3.14159265358979323846
 
         re_head, im_head = torch.chunk(head, 2, dim=2)
         re_tail, im_tail = torch.chunk(tail, 2, dim=2)
 
-        #Make phases of relations uniformly distributed in [-pi, pi]
+        # Make phases of relations uniformly distributed in [-pi, pi]
 
-        phase_relation = relation/(self.embedding_range/pi)
+        phase_relation = relation / (self.embedding_range / pi)
 
         re_relation = torch.cos(phase_relation)
         im_relation = torch.sin(phase_relation)
@@ -359,10 +382,10 @@ class RotatEDecoder(Decoder):
             re_score = re_score - re_tail
             im_score = im_score - im_tail
 
-        score = torch.stack([re_score, im_score], dim = 0)
-        score = score.norm(dim = 0)
+        score = torch.stack([re_score, im_score], dim=0)
+        score = score.norm(dim=0)
 
-        score = self.gamma - score.sum(dim = 2)
+        score = self.gamma - score.sum(dim=2)
         return score
 
     def __repr__(self):

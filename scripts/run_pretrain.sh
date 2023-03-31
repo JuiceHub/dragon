@@ -1,6 +1,6 @@
 #!/bin/bash
 
-export CUDA_VISIBLE_DEVICES=0
+export CUDA_VISIBLE_DEVICES=1
 export TOKENIZERS_PARALLELISM=true
 export OMP_NUM_THREADS=4
 dt=`date '+%Y%m%d_%H%M%S'`
@@ -79,11 +79,11 @@ echo "ie_dim: ${ie_dim}, info_exchange: ${info_exchange}"
 echo "kgd: ${kgd}"
 echo "******************************"
 
-save_dir_pref='runs'
+save_dir_pref='pretrain'
 mkdir -p $save_dir_pref
 mkdir -p logs
 
-run_name=dragon__${dataset}__${dt}
+run_name=v2_dragon__${dataset}__${dt}
 log=logs/pretrain__${run_name}.log.txt
 
 ###### Training ######
