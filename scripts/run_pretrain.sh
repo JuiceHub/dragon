@@ -94,7 +94,7 @@ python3 -u dragon.py \
     --end_task $end_task --mlm_task $mlm_task --link_task $link_task \
     --mlm_probability $mlmp \
     --link_drop_max_count $ldrpc --link_drop_probability $ldrpp --link_drop_probability_in_which_keep $ldrppk --link_negative_sample_size $negs --link_normalize_headtail $normht --link_proj_headtail $projHT --scaled_distmult $scldstmlt --link_decoder $kgd --link_gamma $gamma \
-    --save_dir ${save_dir_pref}/${dataset}/${run_name} --save_model 0 \
+    --save_dir ${save_dir_pref}/${dataset}/${run_name} --save_model 2 \
     --run_name ${run_name} \
     --load_model_path $load_model_path \
     --residual_ie $residual_ie \
