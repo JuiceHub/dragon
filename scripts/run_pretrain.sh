@@ -1,6 +1,6 @@
 #!/bin/bash
 
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=3
 export TOKENIZERS_PARALLELISM=true
 export OMP_NUM_THREADS=4
 dt=`date '+%Y%m%d_%H%M%S'`
@@ -84,7 +84,7 @@ save_dir_pref='pretrain'
 mkdir -p $save_dir_pref
 mkdir -p logs
 
-run_name=dragon__${dataset}__${dt}
+run_name=v3_dragon__${dataset}__${dt}
 log=logs/pretrain__${run_name}.log.txt
 
 ###### Training ######
