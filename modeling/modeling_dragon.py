@@ -1312,19 +1312,7 @@ class RoBERTaGAT(BertEncoder):
                         self.info_exchange == "every-other-layer" and (i - self.num_hidden_layers + self.k) % 2 == 0):
                     X = _X.view(bs, -1, _X.size(1))  # [bs, max_num_nodes, node_dim]
 
-                    X_copy = X.clone()
-                    hidden_states_node = hidden_states.clone()
-                    hidden_states_node = self.activation(self.svec2nvec(hidden_states_node))
-
-                    X, lm_node_scores = self.SKatts(X, hidden_states_node, gnn_mask, lm_mask, return_att=True)
-                    X = self.attention_prj(X)
-
-                    hidden_states_node = self.KSatts(hidden_states_node, X_copy, lm_mask, gnn_mask, return_att=False)
-                    hidden_states_node = self.hidden_states_prj(hidden_states_node)
-
-                    hidden_states_node = self.activation(self.nvec2svec(hidden_states_node))
-
-                    hidden_states = self.layer_norm(hidden_states_node + hidden_states)
+                    X, hidden_states = self.sk_message_pass(X, gnn_mask, hidden_states, lm_mask)
 
                     context_node_lm_feats = hidden_states[:, 0, :]  # [bs, sent_dim]
                     context_node_gnn_feats = X[:, 0, :]  # [bs, node_dim]
@@ -1356,6 +1344,21 @@ class RoBERTaGAT(BertEncoder):
         if output_attentions:
             outputs = outputs + (all_attentions,)
         return outputs, _X  # last-layer hidden state, (all hidden states), (all attentions)
+
+    def sk_message_pass(self, X, gnn_mask, hidden_states, lm_mask):
+        X_copy = X.clone()
+        hidden_states_node = hidden_states.clone()
+
+        hidden_states_node = self.activation(self.svec2nvec(hidden_states_node))
+        X, lm_node_scores = self.SKatts(X, hidden_states_node, gnn_mask, lm_mask, return_att=True)
+        X = self.attention_prj(X)
+
+        hidden_states_node = self.KSatts(hidden_states_node, X_copy, lm_mask, gnn_mask, return_att=False)
+        hidden_states_node = self.hidden_states_prj(hidden_states_node)
+
+        hidden_states_node = self.activation(self.nvec2svec(hidden_states_node))
+        hidden_states = self.layer_norm(hidden_states_node + hidden_states)
+        return X, hidden_states
 
     def get_fake_inputs(self, device="cuda:0"):
         bs = 20
