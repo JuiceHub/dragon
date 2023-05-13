@@ -51,7 +51,7 @@ fp16=true
 upcast=true
 
 #load_model_path=models/general_model.pt
-load_model_path=models/model.pt.v3
+load_model_path=models/model.pt.v4
 
 
 echo "***** hyperparameters *****"
@@ -67,7 +67,7 @@ save_dir_pref='runs'
 mkdir -p $save_dir_pref
 mkdir -p logs
 
-run_name=v3_dragon__${dataset}_ih_${inhouse}_load__elr${elr}_dlr${dlr}_W${warmup_steps}_b${bs}_ufz${unfreeze_epoch}_e${n_epochs}_sd${seed}__${dt}
+run_name=v4_dragon__${dataset}_ih_${inhouse}_load__elr${elr}_dlr${dlr}_W${warmup_steps}_b${bs}_ufz${unfreeze_epoch}_e${n_epochs}_sd${seed}__${dt}
 log=logs/train__${run_name}.log.txt
 
 ###### Training ######

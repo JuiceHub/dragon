@@ -84,7 +84,7 @@ save_dir_pref='pretrain'
 mkdir -p $save_dir_pref
 mkdir -p logs
 
-run_name=v3_dragon__${dataset}__${dt}
+run_name=v4_dragon__${dataset}__${dt}
 log=logs/pretrain__${run_name}.log.txt
 
 ###### Training ######
