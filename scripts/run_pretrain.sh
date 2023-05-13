@@ -1,6 +1,6 @@
 #!/bin/bash
 
-export CUDA_VISIBLE_DEVICES=0,1
+export CUDA_VISIBLE_DEVICES=2,3
 export TOKENIZERS_PARALLELISM=true
 export OMP_NUM_THREADS=4
 dt=`date '+%Y%m%d_%H%M%S'`

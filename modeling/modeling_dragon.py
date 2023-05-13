@@ -1270,7 +1270,7 @@ class RoBERTaGAT(BertEncoder):
             self.nvec2svec = nn.Linear(hidden_size, self.sent_dim)
             self.svec2nvec = nn.Linear(self.sent_dim, hidden_size)
 
-            self.layer_norm = nn.LayerNorm(self.sent_dim)
+            self.layer_norm = nn.LayerNorm(hidden_size)
 
     def forward(self, hidden_states, attention_mask, lm_mask, gnn_mask, special_tokens_mask, head_mask, _X, edge_index,
                 edge_type,
@@ -1346,18 +1346,18 @@ class RoBERTaGAT(BertEncoder):
         return outputs, _X  # last-layer hidden state, (all hidden states), (all attentions)
 
     def sk_message_pass(self, X, gnn_mask, hidden_states, lm_mask):
-        X_copy = X.clone()
         hidden_states_node = hidden_states.clone()
 
         hidden_states_node = self.activation(self.svec2nvec(hidden_states_node))
-        X, lm_node_scores = self.SKatts(X, hidden_states_node, gnn_mask, lm_mask, return_att=True)
-        X = self.attention_prj(X)
+        X_node, lm_node_scores = self.SKatts(X, hidden_states_node, gnn_mask, lm_mask, return_att=True)
+        X_node = self.attention_prj(X_node)
+        X = self.layer_norm(X + X_node)
 
-        hidden_states_node = self.KSatts(hidden_states_node, X_copy, lm_mask, gnn_mask, return_att=False)
-        hidden_states_node = self.hidden_states_prj(hidden_states_node)
-
-        hidden_states_node = self.activation(self.nvec2svec(hidden_states_node))
-        hidden_states = self.layer_norm(hidden_states_node + hidden_states)
+        # hidden_states_node = self.KSatts(hidden_states_node, X_copy, lm_mask, gnn_mask, return_att=False)
+        # hidden_states_node = self.hidden_states_prj(hidden_states_node)
+        #
+        # hidden_states_node = self.activation(self.nvec2svec(hidden_states_node))
+        # hidden_states = self.layer_norm(hidden_states_node + hidden_states)
         return X, hidden_states
 
     def get_fake_inputs(self, device="cuda:0"):
