@@ -46,7 +46,7 @@ class GATConvE(MessagePassing):
     """
 
     def __init__(self, args, emb_dim, n_ntype, n_etype, edge_encoder, head_count=4, aggr="add",
-                 negative_slope: float = 0.2, dropout: float = 0.1):
+                 negative_slope: float = 0.2, dropout: float = 0):
         super(GATConvE, self).__init__(aggr=aggr)
         self.args = args
 
@@ -134,7 +134,7 @@ class GATConvE(MessagePassing):
         else:
             return out
 
-    def message(self, edge_index, x_i, x_j, edge_attr):  # i: tgt, j:src
+    def message(self, edge_index, x_i, x_j, edge_attr, index, ptr, size_i):  # i: tgt, j:src
 
         # assert len(edge_attr.size()) == 2
         # assert edge_attr.size(1) == self.emb_dim
@@ -148,11 +148,11 @@ class GATConvE(MessagePassing):
         query = self.linear_query(x_j).view(-1, self.head_count, self.dim_per_head)  # [E, heads, _dim]
 
         x = key + query
-        src_node_index = edge_index[1]  # [E,]
+        src_node_index = edge_index[0]  # [E,]
         x = F.leaky_relu(x, self.negative_slope)
         alpha = (x * self.att).sum(dim=-1)
-        alpha = softmax(alpha, src_node_index)
-        # alpha = softmax(alpha, index, size_i)
+        # alpha = softmax(alpha, src_node_index)
+        alpha = softmax(alpha, index, ptr, size_i)
         self._alpha = alpha
         alpha = F.dropout(alpha, p=self.dropout, training=self.training)
 
