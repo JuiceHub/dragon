@@ -1,6 +1,6 @@
 #!/bin/bash
 
-export CUDA_VISIBLE_DEVICES=1
+export CUDA_VISIBLE_DEVICES=2,3
 export TOKENIZERS_PARALLELISM=true
 export OMP_NUM_THREADS=4
 dt=`date '+%Y%m%d_%H%M%S'`
@@ -50,7 +50,7 @@ random_ent_emb=false
 fp16=true
 upcast=true
 
-load_model_path=models/model.pt.v2
+load_model_path=models/model.pt.v2.2
 
 echo "***** hyperparameters *****"
 echo "dataset: $dataset"
@@ -65,7 +65,7 @@ save_dir_pref='runs'
 mkdir -p $save_dir_pref
 mkdir -p logs
 
-run_name=v2_dragon__${dataset}_ih_${inhouse}_load__elr${elr}_dlr${dlr}_W${warmup_steps}_b${bs}_ufz${unfreeze_epoch}_e${n_epochs}_sd${seed}__${dt}
+run_name=v2.2_dragon__${dataset}_ih_${inhouse}_load__elr${elr}_dlr${dlr}_W${warmup_steps}_b${bs}_ufz${unfreeze_epoch}_e${n_epochs}_sd${seed}__${dt}
 log=logs/train__${run_name}.log.txt
 
 ###### Training ######
